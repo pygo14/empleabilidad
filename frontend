@@ -1,0 +1,114 @@
+import { useState } from 'react';
+import { ApolloClient, InMemoryCache, gql, useMutation, useQuery } from '@apollo/client';
+import './styles.css';
+import { motion } from 'framer-motion';
+
+const client = new ApolloClient({
+  uri: 'http://localhost:4000/graphql',
+  cache: new InMemoryCache(),
+});
+
+const GET_MOVIES = gql`
+  query GetMovies {
+    movies {
+      id
+      title
+      overview
+      poster_path
+      release_date
+      likes
+    }
+  }
+`;
+
+const LIKE_MOVIE = gql`
+  mutation LikeMovie($id: ID!) {
+    likeMovie(id: $id) {
+      id
+      likes
+    }
+  }
+`;
+
+const DELETE_MOVIE = gql`
+  mutation DeleteMovie($id: ID!) {
+    deleteMovie(id: $id)
+  }
+`;
+
+const REGISTER = gql`
+  mutation Register($email: String!, $password: String!) {
+    register(email: $email, password: $password) {
+      token
+    }
+  }
+`;
+
+const LOGIN = gql`
+  mutation Login($email: String!, $password: String!) {
+    login(email: $email, password: $password) {
+      token
+    }
+  }
+`;
+
+export default function App() {
+  const { loading, error, data, refetch } = useQuery(GET_MOVIES, { client });
+  const [likeMovie] = useMutation(LIKE_MOVIE, { client });
+  const [deleteMovie] = useMutation(DELETE_MOVIE, { client });
+  const [register] = useMutation(REGISTER, { client });
+  const [login] = useMutation(LOGIN, { client });
+  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  const handleAuth = async (action) => {
+    const variables = { email, password };
+    const response = await (action === 'register' ? register({ variables }) : login({ variables }));
+    const newToken = response.data[action].token;
+    localStorage.setItem('token', newToken);
+    setToken(newToken);
+  };
+
+  if (loading) return <p className="loading">Cargando...</p>;
+  if (error) return <p className="error">Error: {error.message}</p>;
+
+  return (
+    <motion.div className="container" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
+      <h1 className="title">Oura Movies</h1>
+      {!token ? (
+        <motion.div className="auth" initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>
+          <input className="input" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input className="input" type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button className="button" onClick={() => handleAuth('register')}>Registrarse</button>
+          <button className="button" onClick={() => handleAuth('login')}>Iniciar Sesión</button>
+        </motion.div>
+      ) : (
+        <button className="button logout" onClick={() => { localStorage.removeItem('token'); setToken(null); }}>Cerrar Sesión</button>
+      )}
+      <div className="grid">
+        {data.movies.map((movie) => (
+          <motion.div key={movie.id} className="card" whileHover={{ scale: 1.05 }}>
+            <img className="poster" src={movie.poster_path} alt={movie.title} />
+            <h2 className="movie-title">{movie.title}</h2>
+            <p className="overview">{movie.overview}</p>
+            <p className="release">Fecha de estreno: {movie.release_date}</p>
+            <p className="likes">❤️ {movie.likes}</p>
+            {token && (
+              <div className="buttons">
+                <motion.button className="button like" whileTap={{ scale: 0.9 }} onClick={async () => {
+                  await likeMovie({ variables: { id: movie.id } });
+                  refetch();
+                }}>Like</motion.button>
+                <motion.button className="button delete" whileTap={{ scale: 0.9 }} onClick={async () => {
+                  await deleteMovie({ variables: { id: movie.id } });
+                  refetch();
+                }}>Eliminar</motion.button>
+              </div>
+            )}
+          </motion.div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
