@@ -1,0 +1,135 @@
+// Importaciones necesarias
+import express from 'express';
+import { createYoga, createSchema } from 'graphql-yoga';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import axios from 'axios';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+
+dotenv.config();
+
+// Conectar a MongoDB
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'Error de conexión a MongoDB:'));
+db.once('open', async () => {
+  console.log('Conectado a MongoDB');
+  await preloadMovies();
+});
+
+// Definir el esquema de la película
+const movieSchema = new mongoose.Schema({
+  title: String,
+  overview: String,
+  poster_path: String,
+  release_date: String,
+  likes: { type: Number, default: 0 },
+});
+
+const Movie = mongoose.model('Movie', movieSchema);
+
+// Definir el esquema del usuario
+const userSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+});
+
+const User = mongoose.model('User', userSchema);
+
+// Prellenar la base de datos con películas de TheMovieDB
+const preloadMovies = async () => {
+  const apiUrl = 'https://api.themoviedb.org/3/movie/popular?api_key=c2525d0edb9b982c034d6f755a582ad4';
+  try {
+    const response = await axios.get(apiUrl);
+    const moviesData = response.data.results.slice(0, 30).map(movie => ({
+      title: movie.title,
+      overview: movie.overview,
+      poster_path: `https://image.tmdb.org/t/p/w500${movie.poster_path}`,
+      release_date: movie.release_date,
+      likes: 0,
+    }));
+    await Movie.deleteMany({}); // Limpiar colección antes de insertar
+    await Movie.insertMany(moviesData);
+    console.log('Base de datos prellenada con películas populares.');
+  } catch (error) {
+    console.error('Error al obtener películas de TheMovieDB:', error);
+  }
+};
+
+// Definir el esquema GraphQL
+typeDefs = `
+  type Movie {
+    id: ID!
+    title: String!
+    overview: String!
+    poster_path: String!
+    release_date: String!
+    likes: Int!
+  }
+  type User {
+    id: ID!
+    email: String!
+    token: String
+  }
+  type Query {
+    movies: [Movie]
+  }
+  type Mutation {
+    addMovie(title: String!, overview: String!, poster_path: String!, release_date: String!): Movie
+    deleteMovie(id: ID!): String
+    likeMovie(id: ID!): Movie
+    register(email: String!, password: String!): User
+    login(email: String!, password: String!): User
+  }
+`;
+
+const resolvers = {
+  Query: {
+    movies: async () => await Movie.find(),
+  },
+  Mutation: {
+    addMovie: async (_, { title, overview, poster_path, release_date }) => {
+      const newMovie = new Movie({ title, overview, poster_path, release_date, likes: 0 });
+      return await newMovie.save();
+    },
+    deleteMovie: async (_, { id }) => {
+      await Movie.findByIdAndDelete(id);
+      return 'Película eliminada';
+    },
+    likeMovie: async (_, { id }) => {
+      return await Movie.findByIdAndUpdate(id, { $inc: { likes: 1 } }, { new: true });
+    },
+    register: async (_, { email, password }) => {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const newUser = new User({ email, password: hashedPassword });
+      await newUser.save();
+      const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+      return { id: newUser._id, email, token };
+    },
+    login: async (_, { email, password }) => {
+      const user = await User.findOne({ email });
+      if (!user) throw new Error('Usuario no encontrado');
+      const valid = await bcrypt.compare(password, user.password);
+      if (!valid) throw new Error('Contraseña incorrecta');
+      const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+      return { id: user._id, email, token };
+    },
+  },
+};
+
+const yoga = createYoga({
+  schema: createSchema({ typeDefs, resolvers }),
+});
+
+const app = express();
+app.use(cors());
+app.use('/graphql', yoga);
+
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}/graphql`));
